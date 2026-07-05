@@ -113,6 +113,112 @@ def format_timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 ```
 
+### Speaker diarization
+
+**Prerequisite:** this pipeline needs a one-time HuggingFace license acceptance and an `HF_TOKEN` environment variable. See the token note below.
+
+Whisper alone does not label who is talking. On a two-source interview, a panel discussion, or any recording with more than one voice, the raw transcript comes back as one undifferentiated block. Attribution has to be done by ear or by hand. The tools table lists Otter.ai for speaker ID, which works but ships the audio to a third-party cloud. Local `whisperx` plus `pyannote.audio` labels speakers on your own machine, which matters when the source is confidential.
+
+```python
+import os
+from typing import List, Dict, Optional
+
+import whisperx
+
+def transcribe_with_speakers(audio_path: str,
+                             model_size: str = "large-v3",
+                             min_speakers: Optional[int] = None,
+                             max_speakers: Optional[int] = None) -> List[Dict]:
+    """Return speaker-labeled segments: [{speaker, start, end, text}, ...]."""
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "HF_TOKEN not set. Accept the pyannote license at "
+            "https://huggingface.co/pyannote/speaker-diarization-3.1 "
+            "and export HF_TOKEN before running."
+        )
+
+    # pyannote on Apple Silicon MPS is unreliable at the time of writing.
+    # CPU is the safe default. Set device = "cuda" on a GPU box if available.
+    device = "cpu"
+    compute_type = "int8"
+
+    audio = whisperx.load_audio(audio_path)
+
+    model = whisperx.load_model(model_size, device=device, compute_type=compute_type)
+    result = model.transcribe(audio, batch_size=8)
+
+    align_model, metadata = whisperx.load_align_model(
+        language_code=result["language"], device=device
+    )
+    result = whisperx.align(
+        result["segments"], align_model, metadata, audio, device,
+        return_char_alignments=False,
+    )
+
+    diarize_pipeline = whisperx.DiarizationPipeline(
+        use_auth_token=token, device=device
+    )
+    diarize_segments = diarize_pipeline(
+        audio, min_speakers=min_speakers, max_speakers=max_speakers
+    )
+    result = whisperx.assign_word_speakers(diarize_segments, result)
+
+    # pyannote leaves segments unlabeled on crosstalk and overlap. Use .get() so
+    # unlabeled segments become "UNKNOWN" instead of a KeyError on real audio.
+    return [
+        {
+            "speaker": seg.get("speaker", "UNKNOWN"),
+            "start": seg["start"],
+            "end": seg["end"],
+            "text": seg["text"].strip(),
+        }
+        for seg in result["segments"]
+    ]
+```
+
+`pyannote.audio` speaker-diarization-3.1 is gated on a license acceptance. Visit `https://huggingface.co/pyannote/speaker-diarization-3.1`, click Agree, then create a read token at `https://huggingface.co/settings/tokens` and export it as `HF_TOKEN`. Without it the pipeline raises the message above instead of a 40-line pyannote traceback.
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class DiarizedSegment:
+    speaker: str
+    start: float
+    end: float
+    text: str
+```
+
+```python
+def format_diarized_transcript(segments: List[Dict],
+                               speaker_map: Optional[Dict[str, str]] = None) -> str:
+    """Render segments as [HH:MM:SS] **Speaker**: text."""
+    speaker_map = speaker_map or {}
+    lines = []
+    for seg in segments:
+        raw = seg.get("speaker", "UNKNOWN")
+        # Unmapped labels fall through to the raw pyannote name, not KeyError.
+        name = speaker_map.get(raw, raw)
+        ts = format_timestamp(seg["start"])
+        text = seg["text"].strip()
+        lines.append(f"[{ts}] **{name}**: {text}")
+    return "\n\n".join(lines)
+```
+
+### Assigning real speaker names
+
+Raw pyannote labels look like `SPEAKER_00`, `SPEAKER_01`. Listen to the first thirty seconds, identify each voice once, and remap for the whole transcript:
+
+```python
+speaker_map = {
+    "SPEAKER_00": "Reporter",
+    "SPEAKER_01": "Mayor Chen",
+    "SPEAKER_02": "Chief of Staff",
+}
+transcript = format_diarized_transcript(segments, speaker_map=speaker_map)
+```
+
 ### Manual transcription template
 
 For sensitive interviews or when AI transcription fails:
@@ -350,6 +456,31 @@ def extract_audio_from_video(video_path: str, output_path: str = None) -> str:
     return output_path
 ```
 
+## Hardware capture recommendations
+
+Dedicated capture devices produce cleaner audio than a phone microphone and free your hands during in-person interviews. For remote and video interviews, a desktop app that joins the call captures both sides cleanly.
+
+### Wearable AI voice recorders (in-person interviews)
+
+| Device | Notes |
+|--------|-------|
+| Plaud (plaud.ai) | Clip-on with magnetic back, cloud sync, auto-transcript |
+| Pocket (heypocket.com) | Wearable pendant, cloud sync, auto-transcript |
+
+### Desktop AI meeting apps (remote and video interviews)
+
+| App | Notes |
+|-----|-------|
+| Granola (granola.ai) | Mac desktop app that joins video calls, records both sides, generates notes and searchable transcript |
+
+### Selection notes
+
+- Run your phone as a backup recorder even with a wearable device. Cloud-sync failures are rare but ruinous when they happen.
+- Two-party consent states apply to wearables the same as they apply to phones. Disclose the recorder.
+- Cloud-sync devices upload audio and transcripts to vendor servers. Check the retention policy before recording anything sensitive.
+- For high-sensitivity sources (whistleblowers, criminal referrals, protected identities), prefer a local-only handheld recorder over any cloud-sync device.
+- Verify battery life against the full expected interview window before you sit down. Bring a spare or a wired backup for anything longer than an hour.
+
 ## Legal and ethical considerations
 
 ### Consent documentation
@@ -391,11 +522,15 @@ California, Connecticut, Florida, Illinois, Maryland, Massachusetts, Michigan, M
 | Tool | Purpose | Notes |
 |------|---------|-------|
 | Whisper | Local transcription | Free, accurate, private |
+| whisperx | Local transcription with diarization | Whisper + pyannote, speaker labels on your machine |
 | Otter.ai | Cloud transcription | Real-time, speaker ID |
 | Descript | Edit audio like text | Good for pulling clips |
 | Rev | Human transcription | For sensitive/legal |
 | Trint | Journalist-focused | Collaboration features |
 | oTranscribe | Free web player | Manual transcription aid |
+| Plaud | Wearable hardware recorder | In-person capture, cloud sync |
+| Pocket | Wearable hardware recorder | In-person capture, cloud sync |
+| Granola | Desktop AI meeting app | Remote and video interviews, joins the call |
 
 ## Related skills
 
@@ -409,7 +544,7 @@ California, Connecticut, Florida, Illinois, Maryland, Massachusetts, Michigan, M
 
 | Field | Value |
 |-------|-------|
-| Version | 1.0.0 |
+| Version | 1.1.0 |
 | Created | 2025-12-26 |
 | Author | Claude Skills for Journalism |
 | Domain | Journalism, Research |
