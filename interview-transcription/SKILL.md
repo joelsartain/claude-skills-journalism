@@ -462,12 +462,12 @@ def extract_audio_from_video(video_path: str, output_path: str = None) -> str:
 
 Dedicated capture devices produce cleaner audio than a phone microphone and free your hands during in-person interviews. For remote and video interviews, a desktop app that joins the call captures both sides cleanly.
 
-### Wearable AI voice recorders (in-person interviews)
+### Dedicated AI voice recorders (in-person interviews)
 
 | Device | Notes |
 |--------|-------|
-| Plaud (plaud.ai) | Clip-on with magnetic back, cloud sync, auto-transcript |
-| Pocket (heypocket.com) | Wearable pendant, cloud sync, auto-transcript |
+| Plaud (plaud.ai) | Product line with wearable pin (NotePin) and MagSafe card (Note) form factors, cloud sync, auto-transcript |
+| Pocket (heypocket.com) | Portable AI recorder with three-mic array, cloud sync, auto-transcript |
 
 ### Desktop AI meeting apps (remote and video interviews)
 
@@ -530,8 +530,8 @@ California, Connecticut, Florida, Illinois, Maryland, Massachusetts, Michigan, M
 | Rev | Human transcription | For sensitive/legal |
 | Trint | Journalist-focused | Collaboration features |
 | oTranscribe | Free web player | Manual transcription aid |
-| Plaud | Wearable hardware recorder | In-person capture, cloud sync |
-| Pocket | Wearable hardware recorder | In-person capture, cloud sync |
+| Plaud | Dedicated AI voice recorder (pin + MagSafe card) | In-person capture, cloud sync |
+| Pocket | Dedicated AI voice recorder (portable) | In-person capture, cloud sync |
 | Granola | Desktop AI meeting app | Remote and video interviews, joins the call |
 
 ## Related skills
