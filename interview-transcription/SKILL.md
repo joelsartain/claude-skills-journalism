@@ -121,15 +121,25 @@ Whisper alone does not label who is talking. On a two-source interview, a panel 
 
 ```python
 import os
-from typing import List, Dict, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 import whisperx
+from whisperx.diarize import DiarizationPipeline
+
+@dataclass
+class DiarizedSegment:
+    speaker: str
+    start: float
+    end: float
+    text: str
 
 def transcribe_with_speakers(audio_path: str,
                              model_size: str = "large-v3",
                              min_speakers: Optional[int] = None,
-                             max_speakers: Optional[int] = None) -> List[Dict]:
-    """Return speaker-labeled segments: [{speaker, start, end, text}, ...]."""
+                             max_speakers: Optional[int] = None
+                             ) -> List[DiarizedSegment]:
+    """Return speaker-labeled segments as DiarizedSegment records."""
     token = os.environ.get("HF_TOKEN")
     if not token:
         raise RuntimeError(
@@ -156,8 +166,12 @@ def transcribe_with_speakers(audio_path: str,
         return_char_alignments=False,
     )
 
-    diarize_pipeline = whisperx.DiarizationPipeline(
-        use_auth_token=token, device=device
+    # Pin the well-known 3.1 model explicitly so the HF license URL above stays
+    # correct. Default varies across whisperx releases; pinning avoids surprises.
+    diarize_pipeline = DiarizationPipeline(
+        model_name="pyannote/speaker-diarization-3.1",
+        token=token,
+        device=device,
     )
     diarize_segments = diarize_pipeline(
         audio, min_speakers=min_speakers, max_speakers=max_speakers
@@ -167,12 +181,12 @@ def transcribe_with_speakers(audio_path: str,
     # pyannote leaves segments unlabeled on crosstalk and overlap. Use .get() so
     # unlabeled segments become "UNKNOWN" instead of a KeyError on real audio.
     return [
-        {
-            "speaker": seg.get("speaker", "UNKNOWN"),
-            "start": seg["start"],
-            "end": seg["end"],
-            "text": seg["text"].strip(),
-        }
+        DiarizedSegment(
+            speaker=seg.get("speaker", "UNKNOWN"),
+            start=seg["start"],
+            end=seg["end"],
+            text=seg["text"].strip(),
+        )
         for seg in result["segments"]
     ]
 ```
@@ -180,29 +194,17 @@ def transcribe_with_speakers(audio_path: str,
 `pyannote.audio` speaker-diarization-3.1 is gated on a license acceptance. Visit `https://huggingface.co/pyannote/speaker-diarization-3.1`, click Agree, then create a read token at `https://huggingface.co/settings/tokens` and export it as `HF_TOKEN`. Without it the pipeline raises the message above instead of a 40-line pyannote traceback.
 
 ```python
-from dataclasses import dataclass
-
-@dataclass
-class DiarizedSegment:
-    speaker: str
-    start: float
-    end: float
-    text: str
-```
-
-```python
-def format_diarized_transcript(segments: List[Dict],
-                               speaker_map: Optional[Dict[str, str]] = None) -> str:
+def format_diarized_transcript(segments: List[DiarizedSegment],
+                               speaker_map: Optional[Dict[str, str]] = None
+                               ) -> str:
     """Render segments as [HH:MM:SS] **Speaker**: text."""
     speaker_map = speaker_map or {}
     lines = []
     for seg in segments:
-        raw = seg.get("speaker", "UNKNOWN")
         # Unmapped labels fall through to the raw pyannote name, not KeyError.
-        name = speaker_map.get(raw, raw)
-        ts = format_timestamp(seg["start"])
-        text = seg["text"].strip()
-        lines.append(f"[{ts}] **{name}**: {text}")
+        name = speaker_map.get(seg.speaker, seg.speaker)
+        ts = format_timestamp(seg.start)
+        lines.append(f"[{ts}] **{name}**: {seg.text}")
     return "\n\n".join(lines)
 ```
 
